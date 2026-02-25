@@ -26,7 +26,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-BOT_TOKEN = os.getenv("BOT_TOKEN")
+BOT_TOKEN = os.getenv("8516447460:AAG3YTQiXrtUAl4316hOFUCz0KHfYHSSgi0")
 if not BOT_TOKEN:
     raise ValueError("BOT_TOKEN environment variable not set!")
 
@@ -54,12 +54,12 @@ T = {
         'linkedin': "🔗 LinkedIn profilingiz (ixtiyoriy, /skip):",
         'github': "💻 GitHub profilingiz (ixtiyoriy, /skip):",
         'website': "🌐 Shaxsiy saytingiz (ixtiyoriy, /skip):",
-        'objective': "🎯 Kasbiy maqsadingiz (2-3 jumla):",
+        'objective': "🎯 Kasbiy maqsadingiz (20-30 jumla):",
         'education': (
             "🎓 Ta'lim ma'lumotlaringiz.\n"
             "Har bir ta'limni quyidagi formatda kiriting:\n"
             "Daraja | Muassasa | Yillar | GPA (ixtiyoriy)\n"
-            "Misol: Bakalavr | TATU | 2018-2022 | 3.8\n\n"
+            "Misol: Bakalavr | TISU | 2018-2022 | 3.8\n\n"
             "Bir nechta ta'lim bo'lsa, har birini yangi qatordan yozing.\n"
             "Tugagach /done bosing."
         ),
