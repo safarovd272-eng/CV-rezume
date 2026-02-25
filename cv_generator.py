@@ -1,677 +1,556 @@
 """
-CV Generator - Europa Pass International Style
-PDF va DOCX formatlarida chiroyli CV yaratadi
+CV Generator — Europa Pass International Style
+Canvas asosida pixel-perfect dizayn
+Shrift: Helvetica (bir xil), o'lcham: 9.5-11pt
 """
 
 import os
+from io import BytesIO
+from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import A4
 from reportlab.lib import colors
-from reportlab.lib.units import mm, cm
-from reportlab.platypus import (
-    SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle,
-    HRFlowable, Image, KeepTogether
-)
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.lib.enums import TA_LEFT, TA_CENTER, TA_RIGHT, TA_JUSTIFY
-from reportlab.pdfbase import pdfmetrics
-from reportlab.pdfbase.ttfonts import TTFont
+from reportlab.lib.units import mm
+
+# ── O'lchamlar ────────────────────────────────────────────────────────────────
+PAGE_W, PAGE_H = A4
+SIDEBAR_W      = 65 * mm
+MAIN_X         = SIDEBAR_W
+MAIN_W         = PAGE_W - SIDEBAR_W
+MARGIN         = 8 * mm
+
+# ── Ranglar ───────────────────────────────────────────────────────────────────
+C_BLUE   = colors.HexColor('#1A3C6E')
+C_ACCENT = colors.HexColor('#2E6DB4')
+C_GOLD   = colors.HexColor('#E8B84B')
+C_WHITE  = colors.white
+C_DARK   = colors.HexColor('#1A1A1A')
+C_GRAY   = colors.HexColor('#555555')
+
+# ── Shrift (HAMMASI Helvetica) ────────────────────────────────────────────────
+F_REG  = 'Helvetica'
+F_BOLD = 'Helvetica-Bold'
+F_IT   = 'Helvetica-Oblique'
+
+SZ_NAME    = 20
+SZ_SECTION = 11
+SZ_ROLE    = 10
+SZ_BODY    = 9.5
+SZ_SMALL   = 8.5
+SZ_SB_SEC  = 8
+SZ_SB_VAL  = 8.5
 
 
-# ─── Europa Pass Color Palette ────────────────────────────────────────────────
-BLUE_DARK   = colors.HexColor('#003399')   # EU Blue (sidebar)
-BLUE_MEDIUM = colors.HexColor('#0050A0')   # Section headers
-BLUE_LIGHT  = colors.HexColor('#E8F0FB')   # Background tint
-GOLD        = colors.HexColor('#FFCC00')   # EU Stars gold
-WHITE       = colors.white
-GRAY_DARK   = colors.HexColor('#333333')
-GRAY_MED    = colors.HexColor('#666666')
-GRAY_LIGHT  = colors.HexColor('#F5F5F5')
-BLACK       = colors.black
+def level_dots(level):
+    m = {'a1':1,'a2':2,'b1':3,'b2':4,'c1':5,'c2':6,
+         'native':6,'ona tili':6,'родной':6,
+         'beginner':1,'elementary':2,'intermediate':3,
+         'upper intermediate':4,'advanced':5,'proficient':6}
+    return m.get(level.strip().lower(), 3)
 
 
-def parse_education(edu_list):
-    result = []
-    for item in edu_list:
-        parts = [p.strip() for p in item.split('|')]
-        if len(parts) >= 3:
-            result.append({
-                'degree': parts[0] if len(parts) > 0 else '',
-                'institution': parts[1] if len(parts) > 1 else '',
-                'years': parts[2] if len(parts) > 2 else '',
-                'gpa': parts[3] if len(parts) > 3 else '',
-            })
-    return result
+def draw_lang_bar(c, x, y, filled, total=6):
+    dot_r, gap = 2.2, 6
+    for i in range(total):
+        cx = x + i * gap
+        c.setFillColor(C_GOLD if i < filled else colors.HexColor('#3A5A8A'))
+        c.circle(cx, y, dot_r, fill=1, stroke=0)
 
 
-def parse_work(work_list):
-    result = []
-    for item in work_list:
-        parts = [p.strip() for p in item.split('|')]
-        if len(parts) >= 3:
-            result.append({
-                'position': parts[0] if len(parts) > 0 else '',
-                'company': parts[1] if len(parts) > 1 else '',
-                'years': parts[2] if len(parts) > 2 else '',
-                'description': parts[3] if len(parts) > 3 else '',
-            })
-    return result
+def wrap_text(c, text, font, size, max_w, x, y, line_h):
+    words = str(text).split()
+    line  = ''
+    for word in words:
+        test = line + ' ' + word if line else word
+        if c.stringWidth(test, font, size) <= max_w:
+            line = test
+        else:
+            c.drawString(x, y, line)
+            y -= line_h
+            line = word
+    if line:
+        c.drawString(x, y, line)
+        y -= line_h
+    return y
 
 
-def parse_skills(skills_list):
-    result = []
-    for item in skills_list:
+# ─── Sidebar helpers ──────────────────────────────────────────────────────────
+
+def sidebar_section(c, title, y):
+    y -= 10 * mm
+    c.setFillColor(C_GOLD)
+    c.setFont(F_BOLD, SZ_SB_SEC)
+    c.drawString(MARGIN, y, title.upper())
+    y -= 3.5
+    c.setStrokeColor(C_GOLD)
+    c.setLineWidth(0.5)
+    c.line(MARGIN, y, SIDEBAR_W - MARGIN, y)
+    return y - 5
+
+
+def sidebar_item(c, label, value, y):
+    if not value:
+        return y
+    c.setFillColor(C_GOLD)
+    c.setFont(F_BOLD, 7)
+    c.drawString(MARGIN, y, label.upper())
+    y -= 3.5 * mm
+    c.setFillColor(C_WHITE)
+    c.setFont(F_REG, SZ_SB_VAL)
+    y = wrap_text(c, value, F_REG, SZ_SB_VAL, SIDEBAR_W - MARGIN*2, MARGIN, y, 3.8*mm)
+    return y
+
+
+# ─── Main helpers ─────────────────────────────────────────────────────────────
+
+def main_section(c, title, y):
+    y -= 7 * mm
+    c.setFillColor(C_ACCENT)
+    c.rect(MAIN_X, y - 1*mm, 3, 5*mm, fill=1, stroke=0)
+    c.setFillColor(C_DARK)
+    c.setFont(F_BOLD, SZ_SECTION)
+    c.drawString(MAIN_X + MARGIN, y, title.upper())
+    y -= 2.5 * mm
+    c.setStrokeColor(C_ACCENT)
+    c.setLineWidth(1)
+    c.line(MAIN_X + MARGIN, y, PAGE_W - MARGIN, y)
+    return y - 4 * mm
+
+
+def entry_header(c, left, right, y):
+    c.setFillColor(C_DARK)
+    c.setFont(F_BOLD, SZ_ROLE)
+    c.drawString(MAIN_X + MARGIN, y, left)
+    c.setFillColor(C_GRAY)
+    c.setFont(F_IT, SZ_SMALL)
+    rw = c.stringWidth(right, F_IT, SZ_SMALL)
+    c.drawString(PAGE_W - MARGIN - rw, y, right)
+    return y - 4.5 * mm
+
+
+def entry_sub(c, text, y):
+    c.setFillColor(C_GRAY)
+    c.setFont(F_IT, SZ_SMALL)
+    c.drawString(MAIN_X + MARGIN, y, text)
+    return y - 4 * mm
+
+
+def body_text(c, text, y, indent=0):
+    if not text: return y
+    c.setFillColor(C_DARK)
+    c.setFont(F_REG, SZ_BODY)
+    max_w = MAIN_W - MARGIN*2 - indent
+    y = wrap_text(c, text, F_REG, SZ_BODY, max_w, MAIN_X + MARGIN + indent, y, 4.5*mm)
+    return y
+
+
+def bullet_text(c, text, y):
+    c.setFillColor(C_ACCENT)
+    c.setFont(F_BOLD, SZ_BODY)
+    c.drawString(MAIN_X + MARGIN, y, chr(149))
+    return body_text(c, text, y, indent=4*mm)
+
+
+# ─── Parse funksiyalari ────────────────────────────────────────────────────────
+
+def parse_education(lst):
+    r = []
+    for item in lst:
+        p = [x.strip() for x in item.split('|')]
+        r.append({'degree':p[0] if p else '','institution':p[1] if len(p)>1 else '',
+                  'years':p[2] if len(p)>2 else '','gpa':p[3] if len(p)>3 else ''})
+    return r
+
+def parse_work(lst):
+    r = []
+    for item in lst:
+        p = [x.strip() for x in item.split('|')]
+        r.append({'position':p[0] if p else '','company':p[1] if len(p)>1 else '',
+                  'years':p[2] if len(p)>2 else '','description':p[3] if len(p)>3 else ''})
+    return r
+
+def parse_skills(lst):
+    r = []
+    for item in lst:
         if ':' in item:
-            cat, skills = item.split(':', 1)
-            result.append({'category': cat.strip(), 'skills': skills.strip()})
-    return result
+            cat, sk = item.split(':',1)
+            r.append({'category':cat.strip(),'skills':sk.strip()})
+    return r
+
+def parse_languages(lst):
+    r = []
+    for item in lst:
+        p = [x.strip() for x in item.split('|')]
+        if len(p) >= 2:
+            r.append({'language':p[0],'level':p[1]})
+    return r
+
+def parse_certificates(lst):
+    r = []
+    for item in lst:
+        p = [x.strip() for x in item.split('|')]
+        r.append({'name':p[0] if p else '','org':p[1] if len(p)>1 else '','year':p[2] if len(p)>2 else ''})
+    return r
 
 
-def parse_languages(lang_list):
-    result = []
-    for item in lang_list:
-        parts = [p.strip() for p in item.split('|')]
-        if len(parts) >= 2:
-            result.append({'language': parts[0], 'level': parts[1]})
-    return result
-
-
-def parse_certificates(cert_list):
-    result = []
-    for item in cert_list:
-        parts = [p.strip() for p in item.split('|')]
-        if len(parts) >= 2:
-            result.append({
-                'name': parts[0],
-                'org': parts[1] if len(parts) > 1 else '',
-                'year': parts[2] if len(parts) > 2 else '',
-            })
-    return result
-
-
-def get_level_bar(level_text):
-    """Convert language level to dots (CEFR scale)"""
-    level_map = {
-        'a1': 1, 'a2': 2, 'b1': 3, 'b2': 4, 'c1': 5, 'c2': 6,
-        'native': 6, 'ona tili': 6, 'родной': 6,
-        'beginner': 1, 'elementary': 2, 'intermediate': 3,
-        'upper intermediate': 4, 'advanced': 5, 'proficient': 6,
-    }
-    key = level_text.strip().lower()
-    dots = level_map.get(key, 3)
-    filled = '●' * dots + '○' * (6 - dots)
-    return filled
-
-
-# ─── PDF Generation ───────────────────────────────────────────────────────────
+# ─── ASOSIY PDF ───────────────────────────────────────────────────────────────
 
 def generate_pdf(data: dict, output_path: str):
-    """Europa Pass style PDF yaratadi"""
-    doc = SimpleDocTemplate(
-        output_path,
-        pagesize=A4,
-        leftMargin=0,
-        rightMargin=0,
-        topMargin=0,
-        bottomMargin=0,
-    )
+    c = canvas.Canvas(output_path, pagesize=A4)
 
-    page_width, page_height = A4
-    sidebar_width = 68 * mm
-    main_width = page_width - sidebar_width
+    # ── Sidebar fon ────────────────────────────────────────────────────────────
+    c.setFillColor(C_BLUE)
+    c.rect(0, 0, SIDEBAR_W, PAGE_H, fill=1, stroke=0)
 
-    story = []
+    # ── Foto ───────────────────────────────────────────────────────────────────
+    first = data.get('first_name', '')
+    last  = data.get('last_name', '')
+    photo = data.get('photo')
+    size  = 46 * mm
+    px    = (SIDEBAR_W - size) / 2
+    py    = PAGE_H - size - 12 * mm
+    cx    = px + size/2
+    cy    = py + size/2
 
-    # ── Custom Styles ─────────────────────────────────────────────────────────
-    name_style = ParagraphStyle(
-        'NameStyle',
-        fontName='Helvetica-Bold',
-        fontSize=22,
-        textColor=WHITE,
-        spaceAfter=2,
-        leading=26,
-    )
-    title_style = ParagraphStyle(
-        'TitleStyle',
-        fontName='Helvetica',
-        fontSize=12,
-        textColor=GOLD,
-        spaceAfter=0,
-        leading=16,
-    )
-    sidebar_label_style = ParagraphStyle(
-        'SidebarLabel',
-        fontName='Helvetica-Bold',
-        fontSize=7,
-        textColor=GOLD,
-        spaceBefore=8,
-        spaceAfter=1,
-        leading=9,
-    )
-    sidebar_value_style = ParagraphStyle(
-        'SidebarValue',
-        fontName='Helvetica',
-        fontSize=8,
-        textColor=WHITE,
-        spaceAfter=0,
-        leading=10,
-    )
-    sidebar_section_style = ParagraphStyle(
-        'SidebarSection',
-        fontName='Helvetica-Bold',
-        fontSize=9,
-        textColor=GOLD,
-        spaceBefore=14,
-        spaceAfter=4,
-        leading=11,
-        borderPad=0,
-    )
-    section_title_style = ParagraphStyle(
-        'SectionTitle',
-        fontName='Helvetica-Bold',
-        fontSize=11,
-        textColor=BLUE_MEDIUM,
-        spaceBefore=14,
-        spaceAfter=4,
-        leading=14,
-    )
-    normal_style = ParagraphStyle(
-        'NormalCV',
-        fontName='Helvetica',
-        fontSize=9,
-        textColor=GRAY_DARK,
-        spaceAfter=2,
-        leading=12,
-    )
-    bold_style = ParagraphStyle(
-        'BoldCV',
-        fontName='Helvetica-Bold',
-        fontSize=9,
-        textColor=GRAY_DARK,
-        spaceAfter=1,
-        leading=12,
-    )
-    italic_style = ParagraphStyle(
-        'ItalicCV',
-        fontName='Helvetica-Oblique',
-        fontSize=8,
-        textColor=GRAY_MED,
-        spaceAfter=2,
-        leading=10,
-    )
-    objective_style = ParagraphStyle(
-        'ObjectiveStyle',
-        fontName='Helvetica',
-        fontSize=9,
-        textColor=GRAY_DARK,
-        spaceAfter=4,
-        leading=13,
-        alignment=TA_JUSTIFY,
-    )
-
-    # ── Sidebar Content ───────────────────────────────────────────────────────
-    sidebar_content = []
-
-    # Photo
-    photo_path = data.get('photo')
-    if photo_path and os.path.exists(photo_path):
+    if photo and os.path.exists(photo):
         try:
             from PIL import Image as PILImage
-            img = PILImage.open(photo_path)
+            img = PILImage.open(photo).convert('RGB')
             w, h = img.size
-            ratio = w / h
-            img_w = sidebar_width - 20 * mm
-            img_h = img_w / ratio
-            img_obj = Image(photo_path, width=img_w, height=min(img_h, 50 * mm))
-            img_obj.hAlign = 'CENTER'
-            sidebar_content.append(Spacer(1, 8 * mm))
-            sidebar_content.append(img_obj)
-            sidebar_content.append(Spacer(1, 4 * mm))
-        except:
-            sidebar_content.append(Spacer(1, 60 * mm))
+            m = min(w, h)
+            img = img.crop(((w-m)//2,(h-m)//2,(w+m)//2,(h+m)//2))
+            img = img.resize((300, 300))
+            buf = BytesIO()
+            img.save(buf, format='JPEG')
+            buf.seek(0)
+            c.saveState()
+            path = c.beginPath()
+            path.circle(cx, cy, size/2)
+            c.clipPath(path, stroke=0, fill=0)
+            c.drawImage(buf, px, py, width=size, height=size,
+                        preserveAspectRatio=True, mask='auto')
+            c.restoreState()
+        except Exception:
+            pass
     else:
-        # Placeholder circle
-        sidebar_content.append(Spacer(1, 8 * mm))
-        initials = f"{data.get('first_name', '')[:1]}{data.get('last_name', '')[:1]}".upper()
-        init_style = ParagraphStyle(
-            'Initials', fontName='Helvetica-Bold', fontSize=28,
-            textColor=GOLD, alignment=TA_CENTER
-        )
-        # Draw a circle placeholder
-        circle_table = Table(
-            [[Paragraph(initials, init_style)]],
-            colWidths=[44 * mm], rowHeights=[44 * mm]
-        )
-        circle_table.setStyle(TableStyle([
-            ('BACKGROUND', (0, 0), (-1, -1), colors.HexColor('#0050A0')),
-            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-            ('ROUNDEDCORNERS', [22]),
-            ('BOX', (0, 0), (-1, -1), 2, GOLD),
-        ]))
-        sidebar_content.append(circle_table)
-        sidebar_content.append(Spacer(1, 4 * mm))
+        c.setFillColor(C_ACCENT)
+        c.circle(cx, cy, size/2, fill=1, stroke=0)
+        initials = (first[:1] + last[:1]).upper()
+        c.setFillColor(C_GOLD)
+        c.setFont(F_BOLD, 26)
+        tw = c.stringWidth(initials, F_BOLD, 26)
+        c.drawString(cx - tw/2, cy - 9, initials)
 
-    # Contact info
-    sidebar_content.append(Paragraph("CONTACT", sidebar_section_style))
-    sidebar_content.append(HRFlowable(width=sidebar_width - 16 * mm, thickness=0.5, color=GOLD, spaceAfter=4))
+    # Aylana chegara
+    c.setStrokeColor(C_GOLD)
+    c.setLineWidth(2.5)
+    c.circle(cx, cy, size/2, fill=0, stroke=1)
 
-    contact_items = [
-        ("📧", data.get('email', '')),
-        ("📱", data.get('phone', '')),
-        ("📍", data.get('address', '')),
-    ]
-    for icon, value in contact_items:
-        if value:
-            sidebar_content.append(Paragraph(f"{icon} {value}", sidebar_value_style))
+    sidebar_y = py - 6 * mm
 
-    if data.get('linkedin'):
-        sidebar_content.append(Paragraph(f"in  {data['linkedin']}", sidebar_value_style))
-    if data.get('github'):
-        sidebar_content.append(Paragraph(f"⌨  {data['github']}", sidebar_value_style))
-    if data.get('website'):
-        sidebar_content.append(Paragraph(f"🌐 {data['website']}", sidebar_value_style))
+    # ── CONTACT ────────────────────────────────────────────────────────────────
+    sidebar_y = sidebar_section(c, 'Contact', sidebar_y)
+    for label, key in [('Email','email'),('Phone','phone'),('Address','address'),
+                        ('LinkedIn','linkedin'),('GitHub','github'),('Website','website')]:
+        sidebar_y = sidebar_item(c, label, data.get(key,''), sidebar_y)
 
-    # Personal info
-    sidebar_content.append(Paragraph("PERSONAL", sidebar_section_style))
-    sidebar_content.append(HRFlowable(width=sidebar_width - 16 * mm, thickness=0.5, color=GOLD, spaceAfter=4))
+    # ── PERSONAL ───────────────────────────────────────────────────────────────
+    sidebar_y = sidebar_section(c, 'Personal', sidebar_y)
+    sidebar_y = sidebar_item(c, 'Date of Birth', data.get('dob',''), sidebar_y)
+    sidebar_y = sidebar_item(c, 'Nationality', data.get('nationality',''), sidebar_y)
 
-    personal_items = [
-        ("Date of Birth", data.get('dob', '')),
-        ("Nationality", data.get('nationality', '')),
-    ]
-    for label, val in personal_items:
-        if val:
-            sidebar_content.append(Paragraph(label.upper(), sidebar_label_style))
-            sidebar_content.append(Paragraph(val, sidebar_value_style))
-
-    # Languages
+    # ── LANGUAGES ──────────────────────────────────────────────────────────────
     lang_list = parse_languages(data.get('lang_list', []))
     if lang_list:
-        sidebar_content.append(Paragraph("LANGUAGES", sidebar_section_style))
-        sidebar_content.append(HRFlowable(width=sidebar_width - 16 * mm, thickness=0.5, color=GOLD, spaceAfter=4))
+        sidebar_y = sidebar_section(c, 'Languages', sidebar_y)
         for lang in lang_list:
-            bar = get_level_bar(lang['level'])
-            lname_style = ParagraphStyle('LangName', fontName='Helvetica-Bold', fontSize=8, textColor=WHITE, leading=10)
-            llevel_style = ParagraphStyle('LangLevel', fontName='Helvetica', fontSize=7, textColor=GOLD, leading=9)
-            sidebar_content.append(Paragraph(lang['language'], lname_style))
-            sidebar_content.append(Paragraph(f"{lang['level']}  {bar}", llevel_style))
+            c.setFillColor(C_WHITE)
+            c.setFont(F_BOLD, SZ_SB_VAL)
+            c.drawString(MARGIN, sidebar_y, lang['language'])
+            c.setFillColor(C_GOLD)
+            c.setFont(F_IT, 7.5)
+            c.drawString(MARGIN, sidebar_y - 3.5*mm, lang['level'])
+            draw_lang_bar(c, MARGIN + 22*mm, sidebar_y - 3.5*mm + 1.5, level_dots(lang['level']))
+            sidebar_y -= 9 * mm
 
-    # Skills in sidebar
+    # ── SKILLS ─────────────────────────────────────────────────────────────────
     skills_list = parse_skills(data.get('skills_list', []))
     if skills_list:
-        sidebar_content.append(Paragraph("SKILLS", sidebar_section_style))
-        sidebar_content.append(HRFlowable(width=sidebar_width - 16 * mm, thickness=0.5, color=GOLD, spaceAfter=4))
+        sidebar_y = sidebar_section(c, 'Skills', sidebar_y)
         for sk in skills_list:
-            cat_style = ParagraphStyle('SkCat', fontName='Helvetica-Bold', fontSize=7, textColor=GOLD, leading=9, spaceBefore=4)
-            sk_style = ParagraphStyle('SkVal', fontName='Helvetica', fontSize=7.5, textColor=WHITE, leading=9)
-            sidebar_content.append(Paragraph(sk['category'].upper(), cat_style))
-            sidebar_content.append(Paragraph(sk['skills'], sk_style))
+            c.setFillColor(C_GOLD)
+            c.setFont(F_BOLD, 7.5)
+            c.drawString(MARGIN, sidebar_y, sk['category'].upper())
+            sidebar_y -= 3.5 * mm
+            c.setFillColor(C_WHITE)
+            c.setFont(F_REG, SZ_SB_VAL)
+            sidebar_y = wrap_text(c, sk['skills'], F_REG, SZ_SB_VAL,
+                                  SIDEBAR_W - MARGIN*2, MARGIN, sidebar_y, 3.8*mm)
+            sidebar_y -= 2 * mm
 
-    # ── Main Content ──────────────────────────────────────────────────────────
-    main_content = []
+    # ═════════════════════════════════════════════════════════════════════════
+    # MAIN USTUN
+    # ═════════════════════════════════════════════════════════════════════════
 
-    # Header background done via table below
-    first_name = data.get('first_name', '')
-    last_name = data.get('last_name', '')
+    # Header sariq chiziq
+    c.setFillColor(C_ACCENT)
+    c.rect(MAIN_X, PAGE_H - 40*mm, 3.5, 40*mm, fill=1, stroke=0)
 
-    main_content.append(Spacer(1, 4 * mm))
-    main_content.append(Paragraph(f"{first_name.upper()} {last_name.upper()}", name_style))
+    # ISM
+    main_y = PAGE_H - 13 * mm
+    c.setFillColor(C_BLUE)
+    c.setFont(F_BOLD, SZ_NAME)
+    fw = c.stringWidth(first.upper() + ' ', F_BOLD, SZ_NAME)
+    c.drawString(MAIN_X + MARGIN, main_y, first.upper() + ' ')
+    c.setFillColor(C_ACCENT)
+    c.drawString(MAIN_X + MARGIN + fw, main_y, last.upper())
 
-    # Objective as subtitle
-    objective = data.get('objective', '')
-    if objective:
-        main_content.append(Spacer(1, 2 * mm))
-        main_content.append(Paragraph(objective, objective_style))
+    main_y -= 7 * mm
 
-    # Education
+    # Objective
+    obj = data.get('objective','')
+    if obj:
+        c.setFillColor(C_GRAY)
+        c.setFont(F_IT, SZ_BODY)
+        main_y = wrap_text(c, obj, F_IT, SZ_BODY,
+                           MAIN_W - MARGIN*2, MAIN_X + MARGIN, main_y, 4.5*mm)
+    main_y -= 3 * mm
+
+    # EDUCATION
     edu_list = parse_education(data.get('education_list', []))
     if edu_list:
-        main_content.append(Paragraph("EDUCATION", section_title_style))
-        main_content.append(HRFlowable(
-            width=main_width - 24 * mm, thickness=1, color=BLUE_MEDIUM, spaceAfter=4
-        ))
+        main_y = main_section(c, 'Education', main_y)
         for edu in edu_list:
-            row = Table(
-                [[
-                    Paragraph(f"<b>{edu['degree']}</b>", bold_style),
-                    Paragraph(edu['years'], italic_style)
-                ]],
-                colWidths=[(main_width - 30 * mm) * 0.7, (main_width - 30 * mm) * 0.3]
-            )
-            row.setStyle(TableStyle([('ALIGN', (1, 0), (1, 0), 'RIGHT')]))
-            main_content.append(row)
-            main_content.append(Paragraph(edu['institution'], italic_style))
-            if edu.get('gpa'):
-                main_content.append(Paragraph(f"GPA: {edu['gpa']}", italic_style))
-            main_content.append(Spacer(1, 3 * mm))
+            yr = edu['years'] + (f'  |  GPA: {edu["gpa"]}' if edu.get('gpa') else '')
+            main_y = entry_header(c, edu['degree'], yr, main_y)
+            main_y = entry_sub(c, edu['institution'], main_y)
+            main_y -= 2 * mm
 
-    # Work Experience
+    # WORK
     work_list = parse_work(data.get('work_list', []))
     if work_list:
-        main_content.append(Paragraph("WORK EXPERIENCE", section_title_style))
-        main_content.append(HRFlowable(
-            width=main_width - 24 * mm, thickness=1, color=BLUE_MEDIUM, spaceAfter=4
-        ))
+        main_y = main_section(c, 'Work Experience', main_y)
         for job in work_list:
-            row = Table(
-                [[
-                    Paragraph(f"<b>{job['position']}</b>", bold_style),
-                    Paragraph(job['years'], italic_style)
-                ]],
-                colWidths=[(main_width - 30 * mm) * 0.7, (main_width - 30 * mm) * 0.3]
-            )
-            row.setStyle(TableStyle([('ALIGN', (1, 0), (1, 0), 'RIGHT')]))
-            main_content.append(row)
-            main_content.append(Paragraph(job['company'], italic_style))
+            main_y = entry_header(c, job['position'], job['years'], main_y)
+            main_y = entry_sub(c, job['company'], main_y)
             if job.get('description'):
-                for desc_line in job['description'].split(','):
-                    main_content.append(Paragraph(f"• {desc_line.strip()}", normal_style))
-            main_content.append(Spacer(1, 3 * mm))
+                for desc in job['description'].split(','):
+                    desc = desc.strip()
+                    if desc:
+                        main_y = bullet_text(c, desc, main_y)
+            main_y -= 2 * mm
 
-    # Certificates
+    # CERTIFICATES
     cert_list = parse_certificates(data.get('cert_list', []))
     if cert_list:
-        main_content.append(Paragraph("CERTIFICATES", section_title_style))
-        main_content.append(HRFlowable(
-            width=main_width - 24 * mm, thickness=1, color=BLUE_MEDIUM, spaceAfter=4
-        ))
+        main_y = main_section(c, 'Certificates', main_y)
         for cert in cert_list:
-            row = Table(
-                [[
-                    Paragraph(f"<b>{cert['name']}</b> – {cert['org']}", bold_style),
-                    Paragraph(cert['year'], italic_style)
-                ]],
-                colWidths=[(main_width - 30 * mm) * 0.75, (main_width - 30 * mm) * 0.25]
-            )
-            row.setStyle(TableStyle([('ALIGN', (1, 0), (1, 0), 'RIGHT')]))
-            main_content.append(row)
+            name_p = cert['name'] + (f' — {cert["org"]}' if cert.get('org') else '')
+            main_y = entry_header(c, name_p, cert.get('year',''), main_y)
+        main_y -= 2 * mm
 
-    # Hobbies
-    hobbies = data.get('hobbies', '')
+    # HOBBIES
+    hobbies = data.get('hobbies','')
     if hobbies:
-        main_content.append(Paragraph("INTERESTS", section_title_style))
-        main_content.append(HRFlowable(
-            width=main_width - 24 * mm, thickness=1, color=BLUE_MEDIUM, spaceAfter=4
-        ))
-        main_content.append(Paragraph(hobbies, normal_style))
+        main_y = main_section(c, 'Interests', main_y)
+        main_y = body_text(c, hobbies, main_y)
 
-    # ── Build Two-Column Layout ───────────────────────────────────────────────
-    # Sidebar column
-    sidebar_table_data = []
-    for item in sidebar_content:
-        sidebar_table_data.append([item])
-
-    sidebar_col = Table(
-        sidebar_table_data,
-        colWidths=[sidebar_width - 8 * mm]
-    )
-    sidebar_col.setStyle(TableStyle([
-        ('BACKGROUND', (0, 0), (-1, -1), BLUE_DARK),
-        ('LEFTPADDING', (0, 0), (-1, -1), 8 * mm),
-        ('RIGHTPADDING', (0, 0), (-1, -1), 4 * mm),
-        ('TOPPADDING', (0, 0), (-1, -1), 0),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
-        ('VALIGN', (0, 0), (-1, -1), 'TOP'),
-    ]))
-
-    # Main column
-    main_table_data = []
-    for item in main_content:
-        main_table_data.append([item])
-
-    main_col = Table(
-        main_table_data,
-        colWidths=[main_width - 16 * mm]
-    )
-    main_col.setStyle(TableStyle([
-        ('BACKGROUND', (0, 0), (-1, -1), WHITE),
-        ('LEFTPADDING', (0, 0), (-1, -1), 8 * mm),
-        ('RIGHTPADDING', (0, 0), (-1, -1), 8 * mm),
-        ('TOPPADDING', (0, 0), (-1, -1), 0),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
-        ('VALIGN', (0, 0), (-1, -1), 'TOP'),
-    ]))
-
-    # Combine sidebar + main
-    layout = Table(
-        [[sidebar_col, main_col]],
-        colWidths=[sidebar_width, main_width],
-        rowHeights=[page_height]
-    )
-    layout.setStyle(TableStyle([
-        ('VALIGN', (0, 0), (-1, -1), 'TOP'),
-        ('LEFTPADDING', (0, 0), (-1, -1), 0),
-        ('RIGHTPADDING', (0, 0), (-1, -1), 0),
-        ('TOPPADDING', (0, 0), (-1, -1), 0),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
-    ]))
-
-    story.append(layout)
-    doc.build(story)
+    c.save()
 
 
-# ─── DOCX Generation ──────────────────────────────────────────────────────────
+# ─── DOCX ─────────────────────────────────────────────────────────────────────
 
 def generate_docx(data: dict, output_path: str):
-    """Europa Pass style DOCX yaratadi"""
     from docx import Document
-    from docx.shared import Pt, Cm, RGBColor, Inches
+    from docx.shared import Pt, Cm, RGBColor
     from docx.enum.text import WD_ALIGN_PARAGRAPH
     from docx.enum.table import WD_TABLE_ALIGNMENT, WD_ALIGN_VERTICAL
     from docx.oxml.ns import qn
     from docx.oxml import OxmlElement
-    import copy
 
     doc = Document()
-
-    # Page margins
     for section in doc.sections:
-        section.top_margin = Cm(0)
-        section.bottom_margin = Cm(0)
-        section.left_margin = Cm(0)
-        section.right_margin = Cm(0)
-        section.page_width = Cm(21)
-        section.page_height = Cm(29.7)
+        section.top_margin    = Cm(0)
+        section.bottom_margin = Cm(1)
+        section.left_margin   = Cm(0)
+        section.right_margin  = Cm(0)
+        section.page_width    = Cm(21)
+        section.page_height   = Cm(29.7)
 
-    # Color constants
-    EU_BLUE = RGBColor(0, 51, 153)
-    EU_BLUE_MED = RGBColor(0, 80, 160)
-    EU_GOLD = RGBColor(255, 204, 0)
-    WHITE_COLOR = RGBColor(255, 255, 255)
-    DARK_GRAY = RGBColor(51, 51, 51)
-    MED_GRAY = RGBColor(102, 102, 102)
+    EU_BLUE = RGBColor(26,60,110)
+    ACCENT  = RGBColor(46,109,180)
+    GOLD    = RGBColor(232,184,75)
+    WHITE   = RGBColor(255,255,255)
+    DARK    = RGBColor(26,26,26)
+    GRAY    = RGBColor(85,85,85)
 
-    def set_cell_bg(cell, hex_color):
-        tc = cell._tc
-        tcPr = tc.get_or_add_tcPr()
-        shd = OxmlElement('w:shd')
-        shd.set(qn('w:val'), 'clear')
-        shd.set(qn('w:color'), 'auto')
+    def hex_fill(cell, hex_color):
+        tcPr = cell._tc.get_or_add_tcPr()
+        shd  = OxmlElement('w:shd')
+        shd.set(qn('w:val'),'clear'); shd.set(qn('w:color'),'auto')
         shd.set(qn('w:fill'), hex_color)
         tcPr.append(shd)
 
-    def add_run_with_style(para, text, bold=False, italic=False,
-                           font_size=10, color=None, font_name='Calibri'):
-        run = para.add_run(text)
-        run.bold = bold
-        run.italic = italic
-        run.font.size = Pt(font_size)
-        run.font.name = font_name
-        if color:
-            run.font.color.rgb = color
-        return run
+    def set_w(cell, twips):
+        tcPr = cell._tc.get_or_add_tcPr()
+        tcW  = tcPr.find(qn('w:tcW'))
+        if tcW is None:
+            tcW = OxmlElement('w:tcW'); tcPr.append(tcW)
+        tcW.set(qn('w:w'), str(twips)); tcW.set(qn('w:type'), 'dxa')
 
-    # ── 2-column table: Sidebar | Main ────────────────────────────────────────
     tbl = doc.add_table(rows=1, cols=2)
     tbl.alignment = WD_TABLE_ALIGNMENT.LEFT
     tbl.allow_autofit = False
+    sc = tbl.cell(0,0); mc = tbl.cell(0,1)
+    set_w(sc, 3685); set_w(mc, 8135)
+    hex_fill(sc,'1A3C6E'); hex_fill(mc,'FFFFFF')
+    sc.vertical_alignment = WD_ALIGN_VERTICAL.TOP
+    mc.vertical_alignment = WD_ALIGN_VERTICAL.TOP
 
-    sidebar_cell = tbl.cell(0, 0)
-    main_cell = tbl.cell(0, 1)
-
-    # Widths
-    sidebar_cell.width = Cm(6.8)
-    main_cell.width = Cm(14.2)
-
-    # Background colors
-    set_cell_bg(sidebar_cell, '003399')
-    set_cell_bg(main_cell, 'FFFFFF')
-
-    # Cell vertical alignment
-    sidebar_cell.vertical_alignment = WD_ALIGN_VERTICAL.TOP
-    main_cell.vertical_alignment = WD_ALIGN_VERTICAL.TOP
-
-    # ── Fill Sidebar ──────────────────────────────────────────────────────────
-    def sidebar_para(text, bold=False, color=WHITE_COLOR, size=9, space_before=0, space_after=2):
-        p = sidebar_cell.add_paragraph()
-        p.paragraph_format.space_before = Pt(space_before)
-        p.paragraph_format.space_after = Pt(space_after)
-        p.paragraph_format.left_indent = Cm(0.5)
-        run = p.add_run(text)
-        run.bold = bold
-        run.font.size = Pt(size)
-        run.font.color.rgb = color
-        run.font.name = 'Calibri'
-        return p
-
-    def sidebar_section_header(text):
-        p = sidebar_para(f"◆ {text}", bold=True, color=EU_GOLD, size=9, space_before=10, space_after=3)
-        return p
-
-    # Initials circle (text-based)
-    initials = f"{data.get('first_name', '')[:1]}{data.get('last_name', '')[:1]}".upper()
-    p_init = sidebar_cell.add_paragraph()
-    p_init.paragraph_format.space_before = Pt(20)
-    p_init.paragraph_format.space_after = Pt(4)
-    p_init.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    run_init = p_init.add_run(initials)
-    run_init.font.size = Pt(32)
-    run_init.font.bold = True
-    run_init.font.color.rgb = EU_GOLD
-
-    # Contact
-    sidebar_section_header("CONTACT")
-    if data.get('email'):
-        sidebar_para(f"✉  {data['email']}", size=8)
-    if data.get('phone'):
-        sidebar_para(f"📱 {data['phone']}", size=8)
-    if data.get('address'):
-        sidebar_para(f"📍 {data['address']}", size=8)
-    if data.get('linkedin'):
-        sidebar_para(f"in  {data['linkedin']}", size=7.5)
-    if data.get('github'):
-        sidebar_para(f"⌨  {data['github']}", size=7.5)
-    if data.get('website'):
-        sidebar_para(f"🌐 {data['website']}", size=7.5)
-
-    # Personal
-    sidebar_section_header("PERSONAL")
-    if data.get('dob'):
-        sidebar_para("DATE OF BIRTH", bold=True, color=EU_GOLD, size=7)
-        sidebar_para(data['dob'], size=8)
-    if data.get('nationality'):
-        sidebar_para("NATIONALITY", bold=True, color=EU_GOLD, size=7)
-        sidebar_para(data['nationality'], size=8)
-
-    # Languages
-    lang_list = parse_languages(data.get('lang_list', []))
-    if lang_list:
-        sidebar_section_header("LANGUAGES")
-        for lang in lang_list:
-            bar = get_level_bar(lang['level'])
-            sidebar_para(lang['language'], bold=True, size=8.5)
-            sidebar_para(f"{lang['level']}  {bar}", color=EU_GOLD, size=7.5)
-
-    # Skills
-    skills_list = parse_skills(data.get('skills_list', []))
-    if skills_list:
-        sidebar_section_header("SKILLS")
-        for sk in skills_list:
-            sidebar_para(sk['category'].upper(), bold=True, color=EU_GOLD, size=7.5)
-            sidebar_para(sk['skills'], size=8)
-
-    # ── Fill Main Content ─────────────────────────────────────────────────────
-    main_cell.paragraphs[0].clear()
-
-    def main_para(text='', bold=False, italic=False, size=10,
-                  color=DARK_GRAY, space_before=0, space_after=2,
-                  align=WD_ALIGN_PARAGRAPH.LEFT, indent=0.5):
-        p = main_cell.add_paragraph()
-        p.paragraph_format.space_before = Pt(space_before)
-        p.paragraph_format.space_after = Pt(space_after)
-        p.paragraph_format.left_indent = Cm(indent)
+    def s_para(text='', size=9, bold=False, italic=False, color=WHITE,
+               align=WD_ALIGN_PARAGRAPH.LEFT, sb=0, sa=2):
+        p = sc.add_paragraph()
         p.alignment = align
+        p.paragraph_format.space_before = Pt(sb)
+        p.paragraph_format.space_after  = Pt(sa)
+        p.paragraph_format.left_indent  = Cm(0.45)
         if text:
-            run = p.add_run(text)
-            run.bold = bold
-            run.italic = italic
-            run.font.size = Pt(size)
-            run.font.color.rgb = color
-            run.font.name = 'Calibri'
+            r = p.add_run(text)
+            r.font.name='Calibri'; r.font.size=Pt(size)
+            r.font.bold=bold; r.font.italic=italic
+            r.font.color.rgb=color
         return p
 
-    def section_header(text):
-        p = main_para(text, bold=True, size=12, color=EU_BLUE_MED, space_before=12, space_after=2)
-        # Add bottom border
+    def s_section(title):
+        p = s_para(title.upper(), size=8, bold=True, color=GOLD, sb=8, sa=1)
         pPr = p._p.get_or_add_pPr()
         pBdr = OxmlElement('w:pBdr')
-        bottom = OxmlElement('w:bottom')
-        bottom.set(qn('w:val'), 'single')
-        bottom.set(qn('w:sz'), '6')
-        bottom.set(qn('w:space'), '1')
-        bottom.set(qn('w:color'), '0050A0')
-        pBdr.append(bottom)
-        pPr.append(pBdr)
+        bot  = OxmlElement('w:bottom')
+        bot.set(qn('w:val'),'single'); bot.set(qn('w:sz'),'4')
+        bot.set(qn('w:space'),'1'); bot.set(qn('w:color'),'E8B84B')
+        pBdr.append(bot); pPr.append(pBdr)
+
+    first = data.get('first_name',''); last = data.get('last_name','')
+    initials = (first[:1]+last[:1]).upper()
+    s_para(initials, size=30, bold=True, color=GOLD,
+           align=WD_ALIGN_PARAGRAPH.CENTER, sb=16, sa=6)
+
+    s_section('Contact')
+    for label, key in [('Email','email'),('Phone','phone'),('Address','address'),
+                        ('LinkedIn','linkedin'),('GitHub','github'),('Website','website')]:
+        v = data.get(key,'')
+        if v:
+            s_para(label.upper(), size=7, bold=True, color=GOLD, sb=3, sa=1)
+            s_para(v, size=9, color=WHITE, sa=2)
+
+    s_section('Personal')
+    for label, key in [('Date of Birth','dob'),('Nationality','nationality')]:
+        v = data.get(key,'')
+        if v:
+            s_para(label.upper(), size=7, bold=True, color=GOLD, sb=3, sa=1)
+            s_para(v, size=9, color=WHITE, sa=2)
+
+    lang_list = parse_languages(data.get('lang_list',[]))
+    if lang_list:
+        s_section('Languages')
+        for lang in lang_list:
+            dots = level_dots(lang['level'])
+            bar  = 'ā' * dots + 'ā' * (6-dots)
+            s_para(lang['language'], size=9, bold=True, color=WHITE, sb=3, sa=1)
+            s_para(f"{lang['level']}  {'●'*dots}{'○'*(6-dots)}", size=8, italic=True, color=GOLD, sa=2)
+
+    skills_list = parse_skills(data.get('skills_list',[]))
+    if skills_list:
+        s_section('Skills')
+        for sk in skills_list:
+            s_para(sk['category'].upper(), size=7.5, bold=True, color=GOLD, sb=3, sa=1)
+            s_para(sk['skills'], size=9, color=WHITE, sa=2)
+
+    # ── Main ──────────────────────────────────────────────────────────────────
+    mc.paragraphs[0].clear()
+
+    def m_para(text='', size=10, bold=False, italic=False,
+               color=DARK, align=WD_ALIGN_PARAGRAPH.LEFT,
+               sb=0, sa=2, indent=0):
+        p = mc.add_paragraph()
+        p.alignment = align
+        p.paragraph_format.space_before = Pt(sb)
+        p.paragraph_format.space_after  = Pt(sa)
+        p.paragraph_format.left_indent  = Cm(0.5 + indent)
+        if text:
+            r = p.add_run(text)
+            r.font.name='Calibri'; r.font.size=Pt(size)
+            r.font.bold=bold; r.font.italic=italic
+            r.font.color.rgb=color
         return p
 
-    # Name
-    name_p = main_cell.paragraphs[0]
-    name_p.paragraph_format.space_before = Pt(16)
-    name_p.paragraph_format.space_after = Pt(4)
-    name_p.paragraph_format.left_indent = Cm(0.5)
-    name_run = name_p.add_run(
-        f"{data.get('first_name', '').upper()} {data.get('last_name', '').upper()}"
-    )
-    name_run.font.size = Pt(24)
-    name_run.font.bold = True
-    name_run.font.color.rgb = EU_BLUE
-    name_run.font.name = 'Calibri'
+    def m_section(title):
+        p = m_para(title.upper(), size=11, bold=True, color=ACCENT, sb=10, sa=2)
+        pPr = p._p.get_or_add_pPr()
+        pBdr = OxmlElement('w:pBdr')
+        bot  = OxmlElement('w:bottom')
+        bot.set(qn('w:val'),'single'); bot.set(qn('w:sz'),'6')
+        bot.set(qn('w:space'),'1'); bot.set(qn('w:color'),'2E6DB4')
+        pBdr.append(bot); pPr.append(pBdr)
 
-    # Objective
+    # NAME
+    p = mc.paragraphs[0]
+    p.paragraph_format.space_before = Pt(14)
+    p.paragraph_format.space_after  = Pt(4)
+    p.paragraph_format.left_indent  = Cm(0.5)
+    r1 = p.add_run(first.upper() + ' ')
+    r1.font.name='Calibri'; r1.font.size=Pt(20)
+    r1.font.bold=True; r1.font.color.rgb=EU_BLUE
+    r2 = p.add_run(last.upper())
+    r2.font.name='Calibri'; r2.font.size=Pt(20)
+    r2.font.bold=True; r2.font.color.rgb=ACCENT
+
     if data.get('objective'):
-        main_para(data['objective'], size=9.5, space_before=4, space_after=8,
-                  color=DARK_GRAY)
+        m_para(data['objective'], size=9.5, italic=True, color=GRAY, sa=6)
 
-    # Education
-    edu_list = parse_education(data.get('education_list', []))
+    edu_list = parse_education(data.get('education_list',[]))
     if edu_list:
-        section_header("EDUCATION")
+        m_section('Education')
         for edu in edu_list:
-            p = main_para(f"{edu['degree']}", bold=True, size=10, space_before=4)
-            main_para(f"{edu['institution']} | {edu['years']}" + (f" | GPA: {edu['gpa']}" if edu.get('gpa') else ''),
-                      italic=True, size=9, color=MED_GRAY)
+            p = m_para(sb=4, sa=1)
+            r1 = p.add_run(edu['degree'])
+            r1.font.name='Calibri'; r1.font.size=Pt(10)
+            r1.font.bold=True; r1.font.color.rgb=DARK
+            if edu.get('years'):
+                r2 = p.add_run(f"  {edu['years']}")
+                r2.font.name='Calibri'; r2.font.size=Pt(8.5)
+                r2.font.italic=True; r2.font.color.rgb=GRAY
+            m_para(edu['institution'], size=9, italic=True, color=GRAY, sa=4)
 
-    # Work Experience
-    work_list = parse_work(data.get('work_list', []))
+    work_list = parse_work(data.get('work_list',[]))
     if work_list:
-        section_header("WORK EXPERIENCE")
+        m_section('Work Experience')
         for job in work_list:
-            main_para(f"{job['position']}", bold=True, size=10, space_before=4)
-            main_para(f"{job['company']} | {job['years']}", italic=True, size=9, color=MED_GRAY)
+            p = m_para(sb=4, sa=1)
+            r1 = p.add_run(job['position'])
+            r1.font.name='Calibri'; r1.font.size=Pt(10)
+            r1.font.bold=True; r1.font.color.rgb=DARK
+            if job.get('years'):
+                r2 = p.add_run(f"  {job['years']}")
+                r2.font.name='Calibri'; r2.font.size=Pt(8.5)
+                r2.font.italic=True; r2.font.color.rgb=GRAY
+            m_para(job['company'], size=9, italic=True, color=GRAY, sa=2)
             if job.get('description'):
-                for desc_line in job['description'].split(','):
-                    main_para(f"• {desc_line.strip()}", size=9)
+                for desc in job['description'].split(','):
+                    desc = desc.strip()
+                    if desc:
+                        m_para(f'• {desc}', size=9.5, color=DARK, sa=1, indent=0.3)
 
-    # Certificates
-    cert_list = parse_certificates(data.get('cert_list', []))
+    cert_list = parse_certificates(data.get('cert_list',[]))
     if cert_list:
-        section_header("CERTIFICATES")
+        m_section('Certificates')
         for cert in cert_list:
-            main_para(f"• {cert['name']} – {cert['org']} ({cert['year']})", size=9.5, space_before=2)
+            t = cert['name']
+            if cert.get('org'): t += f' — {cert["org"]}'
+            if cert.get('year'): t += f' ({cert["year"]})'
+            m_para(f'• {t}', size=9.5, color=DARK, sb=2, sa=2, indent=0.3)
 
-    # Hobbies
     if data.get('hobbies'):
-        section_header("INTERESTS")
-        main_para(data['hobbies'], size=9.5)
+        m_section('Interests')
+        m_para(data['hobbies'], size=9.5, color=DARK, sa=2)
 
     doc.save(output_path)
